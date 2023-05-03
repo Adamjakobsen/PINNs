@@ -4,9 +4,9 @@ import numpy as np
 
 
 def get_data():
-    scar_filename = "/home/adam/Skole/Master/Sim/rhythmtester_nonischemic/meshes/scarmesh/scarmesh_1.h5"
+    scar_filename = "../meshes/scarmesh_1.h5"
 
-    v_filename = "/home/adam/Skole/Master/Sim/rhythmtester_nonischemic/simulations/testsim/vm.h5"
+    v_filename = "../meshes//vm.h5"
 
     with h5py.File(scar_filename, "r") as scar_file:
         coordinates = scar_file["coordinates"][:]
@@ -30,7 +30,7 @@ def get_data():
 
 
 def get_boundary():
-    boundary_filename = "/home/adam/Skole/Master/Sim/rhythmtester_nonischemic/meshes/basemesh/boundary_mesh.h5"
+    boundary_filename = "../meshes//boundary_mesh.h5"
 
     with h5py.File(boundary_filename, "r") as boundary_file:
         group1 = boundary_file["Mesh"]
