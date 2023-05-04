@@ -6,7 +6,7 @@ import numpy as np
 def get_data():
     scar_filename = "../meshes/scarmesh_1.h5"
 
-    v_filename = "../meshes//vm.h5"
+    v_filename = "../meshes/vm.h5"
 
     with h5py.File(scar_filename, "r") as scar_file:
         coordinates = scar_file["coordinates"][:]
@@ -20,8 +20,13 @@ def get_data():
     with h5py.File(v_filename, "r") as v_file:
         group = v_file["vm"]
         datasets = list(group.keys())
+        float_numbers = [float(number) for number in datasets]
+        sorted_float_numbers = sorted(float_numbers)
+        # sort datasets starts at t=0 end t=600 with length datasets
+        datasets = [str(number) for number in sorted_float_numbers]
         for dataset in datasets:
             data = group[dataset]
+            print(dataset)
 
             vm[i, :] = data[:]
             i += 1
