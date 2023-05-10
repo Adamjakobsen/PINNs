@@ -10,19 +10,20 @@ import scipy.io
 import os
 torch.cuda.empty_cache()
 
-gc.collect()
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "1024"
-torch.cuda.memory_summary(device=None, abbreviated=False)
+# gc.collect()
+# os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "1024"
+# torch.cuda.memory_summary(device=None, abbreviated=False)
 
 
 class CustomPointCloud(dde.geometry.PointCloud):
-    def __init__(self, points, boundary_points):
-        super(CustomPointCloud, self).__init__(points, boundary_points)
+    def __init__(self, points, boundary_points, boundary_normals):
+        super(CustomPointCloud, self).__init__(
+            points, boundary_points, boundary_normals)
 
     def compute_k_nearest_neighbors(self, x, k=3):
         # Compute the k-nearest neighbors for each boundary point
         nbrs = NearestNeighbors(
-            n_neighbors=k, algorithm='auto').fit(self.points)
+            n_neighbors=k, algorithm='auto').fit(self.boundary_points)
         distances, indices = nbrs.kneighbors(x)
         return indices
 
@@ -32,13 +33,8 @@ class CustomPointCloud(dde.geometry.PointCloud):
 
         normals = np.zeros_like(x)
         for i, idx in enumerate(indices):
-            # Compute the normal vector for each boundary point using the cross product of two neighbor vectors
-            v1 = self.points[idx[1]] - self.points[idx[0]]
-            v2 = self.points[idx[2]] - self.points[idx[0]]
-            normal = self.points[idx[0]]-v1-v2
 
-            # Normalize the normal vector
-            normal /= np.linalg.norm(normal)
+            normal = self.boundary_normals[idx[0]]
 
             normals[i] = normal
 
@@ -47,14 +43,14 @@ class CustomPointCloud(dde.geometry.PointCloud):
 
 class PINN():
     def __init__(self):
-        self.a = 0.01
+        self.a = 0.15
         self.k = 8.0
         self.mu1 = 0.2
         self.mu2 = 0.3
         self.eps = 0.002
         self.b = 0.15
         self.h = 0.1
-        self.D = 0.1
+        self.D = 1
 
     def pde2d(self, x, y):
         V, W = y[:, 0:1], y[:, 1:2]
@@ -71,15 +67,28 @@ class PINN():
 
     def get_data(self):
         from utils import get_data, get_boundary
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
         vertices, triangles, vm = get_data()
+        # normalize features
+        x_mean = 0  # np.mean(vertices[:, 0])
+        x_std = 1  # np.std(vertices[:, 0])
+        y_mean = 0  # np.mean(vertices[:, 1])
+        y_std = 1  # np.std(vertices[:, 1])
+        vertices[:, 0] = (vertices[:, 0] - x_mean) / x_std
+        vertices[:, 1] = (vertices[:, 1] - y_mean) / y_std
 
         self.vertices = vertices
         self.triangles = triangles
+
         print("self.triangles shape:", self.triangles.shape)
-        self.vm = vm[:, ::10]
-        x = vertices[::10, 0]
-        y = vertices[::10, 1]
-        t = np.linspace(0, 600, self.vm.shape[0])
+        self.vm = vm[:10, ::20]
+        x = vertices[::20, 0]
+        y = vertices[::20, 1]
+        t = np.linspace(0, 600, 121)[:10]
+        t_mean = 0  # np.mean(t)
+        t_std = 1  # np.std(t)
+        t = (t - t_mean) / t_std
 
         X, T = np.meshgrid(x, t)
         Y, T = np.meshgrid(y, t)
@@ -88,6 +97,7 @@ class PINN():
         Y = Y.reshape(-1, 1)
         V = self.vm.reshape(-1, 1)
         vertices_boundary, triangles_boundary = get_boundary()
+
         self.vertices_boundary = vertices_boundary
         self.triangles_boundary = triangles_boundary
 
@@ -100,7 +110,15 @@ class PINN():
         Y_boundary = Y_boundary.reshape(-1, 1)
         print("self.vertices shape:", self.vertices.shape)
         print("self.vertices_boundary shape:", self.vertices_boundary.shape)
-
+        """ 
+        X= scaler.transform(X)
+        Y = scaler.transform(Y)
+        T = scaler.transform(T)
+        X_boundary = scaler.transform(X_boundary)
+        Y_boundary = scaler.transform(Y_boundary)
+        T_boundary = scaler.transform(T_boundary)
+        V = scaler.transform(V)
+        """
         return np.hstack((X, Y, T)), np.hstack((X_boundary, Y_boundary, T_boundary)), V
 
     def BC(self, geomtime):
@@ -119,7 +137,18 @@ class PINN():
         return dde.PointSetBC(observe_init, v_init, component=0)
 
     def geotime(self):
-        geom = CustomPointCloud(self.vertices, self.vertices_boundary)
+
+        self.boundary_normals = np.load("normals.npy")
+        # remove points from vertices that are in the boundary
+        vertices_expanded = self.vertices[:, np.newaxis]
+        boundary_vertices_expanded = self.vertices_boundary[np.newaxis, :]
+
+        is_vertex_on_boundary = np.any(
+            np.all(vertices_expanded == boundary_vertices_expanded, axis=-1), axis=-1)
+        unique_vertices = self.vertices[~is_vertex_on_boundary]
+        print("self.boundary_normals shape:", self.boundary_normals.shape)
+        geom = CustomPointCloud(
+            self.vertices, self.vertices_boundary, self.boundary_normals)
         timedomain = dde.geometry.TimeDomain(0, 600)
         geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
@@ -131,7 +160,7 @@ def main():
 
     X, X_boundary, v = pinn.get_data()
     X_train, X_test, v_train, v_test = train_test_split(
-        X, v, test_size=0.9)
+        X, v, test_size=0.1)
 
     data_list = [X, X_train, v_train, v]
 
@@ -143,9 +172,8 @@ def main():
     data = dde.data.TimePDE(geomtime,
                             pinn.pde2d,
                             input_data,
-                            num_domain=1000,
-                            num_boundary=100,
-                            anchors=X_train)
+                            num_domain=40000,
+                            num_boundary=100)
     """
 
     from sklearn.preprocessing import StandardScaler
@@ -173,16 +201,18 @@ def main():
     data = dde.data.TimePDE(geomtime,
                             pinn.pde2d,
                             input_data,
-                            num_domain=1000,
-                            num_boundary=100,
                             anchors=X_train)
     """
-    n_neurons = 100
-    n_layers = 2
+    n_neurons = 50
+    n_layers = 6
     n_epochs = 6000
+    activations = ["sinc", "sin", "sin",
+                   "sin", "sin", "sin", "sin"]
 
     net = dde.maps.FNN([3] + n_layers * [n_neurons] +
-                       [2], "tanh", "Glorot normal")
+                       [2], activations, "He normal")
+
+    # silu: not too bad, but not great
 
 # Set model_save_path to save the model
     import os
@@ -194,35 +224,51 @@ def main():
             save_path, save_better_only=True, period=2000)
 
         model = dde.Model(data, net)
+
         """ 
         # Stabalize initialization process by capping the losses
-        model.compile("adam", lr=0.005)
+        model.compile("adam", lr=0.05)
         losshistory, _ = model.train(epochs=1)
         initial_loss = max(losshistory.loss_train[0])
         num_init = 1
-        while initial_loss > 0.1 or np.isnan(initial_loss):
+        while initial_loss > 10. or np.isnan(initial_loss):
             num_init += 1
             model = dde.Model(data, net)
-            model.compile("adam", lr=0.005)
+            model.compile("adam", lr=0.05)
             losshistory, _ = model.train(epochs=1)
             initial_loss = max(losshistory.loss_train[0])
-         """
+        """
         # Phase1
-        model.compile("adam", lr=0.001, loss_weights=init_weights)
+        model.compile("adam", lr=0.0005, loss_weights=init_weights)
         losshistory, train_state = model.train(
-            epochs=10000, model_save_path=save_path)
+            iterations=10000, model_save_path=save_path)
+
+        dde.saveplot(losshistory, train_state, issave=True, isplot=True)
+        """ 
+
+        model.compile("adam", lr=0.005, loss_weights=init_weights)
+        losshistory, train_state = model.train(
+            iterations=3000, model_save_path=save_path)
+
+        model.compile("adam", lr=0.00001, loss_weights=init_weights)
+        losshistory, train_state = model.train(
+            iterations=3000, model_save_path=save_path)
+        dde.saveplot(losshistory, train_state, issave=True, isplot=True)
+        """
         # Phase 2
 
-        model.compile("adam", lr=0.0001)
+        model.compile("adam", lr=0.0005)
         losshistory, train_state = model.train(
-            epochs=50000, model_save_path=save_path)
+            iterations=50000, model_save_path=save_path)
+        dde.saveplot(losshistory, train_state, issave=True, isplot=True)
 
         # Phase 3
         model.compile("L-BFGS-B")
-        losshistory, train_state = model.train(model_save_path=save_path)
 
         losshistory, train_state = model.train(
             epochs=n_epochs, model_save_path=save_path, callbacks=[checker])
+
+        dde.saveplot(losshistory, train_state, issave=True, isplot=True)
         # model.compile("L-BFGS-B")
 
         # losshistory, train_state = model.train(model_save_path=save_path,callbacks=[checker])
@@ -237,7 +283,7 @@ def main():
         dde.config.default_device = "cpu"
 
         model = dde.Model(data, net)
-        model.compile("adam", lr=0.0001)
+        model.compile("adam", lr=0.0005)
         # model.compile("adam", lr=0.0001)
         model.restore(save_path+"-"+input("Enter model checkpoint: ")+".pt")
         from plot import generate_2D_animation, plot_2D
@@ -247,8 +293,8 @@ def main():
 
 
 if __name__ == "__main__":
-    torch.cuda.empty_cache()
-    torch.cuda.set_per_process_memory_fraction(0.75)
+
+    torch.cuda.set_per_process_memory_fraction(0.9)
     dde.config.set_default_float("float16")
 
     main()
