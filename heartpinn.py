@@ -82,10 +82,10 @@ class PINN():
         self.triangles = triangles
 
         print("self.triangles shape:", self.triangles.shape)
-        self.vm = vm[:10, ::20]
-        x = vertices[::20, 0]
-        y = vertices[::20, 1]
-        t = np.linspace(0, 600, 121)[:10]
+        self.vm = vm[:20, :]
+        x = vertices[:, 0]
+        y = vertices[:, 1]
+        t = np.linspace(0, 600, 121)[:20]
         t_mean = 0  # np.mean(t)
         t_std = 1  # np.std(t)
         t = (t - t_mean) / t_std
@@ -203,7 +203,7 @@ def main():
                             input_data,
                             anchors=X_train)
     """
-    n_neurons = 50
+    n_neurons = 121
     n_layers = 6
     n_epochs = 6000
     activations = ["sinc", "sin", "sin",
