@@ -71,35 +71,15 @@ class PINN():
         from sklearn.preprocessing import MinMaxScaler
         scaler = MinMaxScaler()
         vertices, triangles, vm = get_data()
-        # normalize features
-        # x_mean = np.mean(vertices[:, 0])
-        # x_std = np.std(vertices[:, 0])
-        # y_mean = np.mean(vertices[:, 1])
-        # y_std = np.std(vertices[:, 1])
-        print("x_max, x_min:", np.max(vertices[:, 0]), np.min(vertices[:, 0]))
-        print("y_max, y_min:", np.max(vertices[:, 1]), np.min(vertices[:, 1]))
-        print("x_mean:", np.mean(vertices[:, 0]))
-        # vertices = vertices
-        # (vertices[:, 0] - x_mean) / x_std
-        # vertices[:, 0] = scaler.fit_transform(vertices[:, 0])
-        # (vertices[:, 1] - y_mean) / y_std
-        # vertices[:, 1] = scaler.fit_transform(vertices[:, 1])
 
         self.vertices = vertices
         self.triangles = triangles
 
         print("self.triangles shape:", self.triangles.shape)
-        self.vm = vm[:10, ::2]
+        self.vm = vm[:15, ::2]
         x = vertices[::2, 0]
         y = vertices[::2, 1]
-        t = np.linspace(0, 600, 121)[:10]
-        # t_mean = np.mean(t)
-        # t_std = np.std(t)
-        # t = scaler.fit_transform(t)  # (t - t_mean) / t_std
-
-        print("-", np.max(x), np.min(x))
-        print("-", np.max(y), np.min(y))
-        print("-", np.max(t), np.min(t))
+        t = np.linspace(0, 600, 121)[:15]
 
         X, T = np.meshgrid(x, t)
         Y, T = np.meshgrid(y, t)
@@ -119,17 +99,7 @@ class PINN():
         X_boundary = X_boundary.reshape(-1, 1)
         T_boundary = T_boundary.reshape(-1, 1)
         Y_boundary = Y_boundary.reshape(-1, 1)
-        print("self.vertices shape:", self.vertices.shape)
-        print("self.vertices_boundary shape:", self.vertices_boundary.shape)
-        """ 
-        X= scaler.transform(X)
-        Y = scaler.transform(Y)
-        T = scaler.transform(T)
-        X_boundary = scaler.transform(X_boundary)
-        Y_boundary = scaler.transform(Y_boundary)
-        T_boundary = scaler.transform(T_boundary)
-        V = scaler.transform(V)
-        """
+
         return np.hstack((X, Y, T)), np.hstack((X_boundary, Y_boundary, T_boundary)), V
 
     def BC(self, geomtime):
@@ -150,16 +120,16 @@ class PINN():
     def geotime(self):
 
         self.boundary_normals = np.load("normals.npy")
-        # remove points from vertices that are in the boundary
+        # remove points from vertices that are on the boundary
         vertices_expanded = self.vertices[:, np.newaxis]
         boundary_vertices_expanded = self.vertices_boundary[np.newaxis, :]
 
         is_vertex_on_boundary = np.any(
             np.all(vertices_expanded == boundary_vertices_expanded, axis=-1), axis=-1)
-        unique_vertices = self.vertices[~is_vertex_on_boundary]
-        print("self.boundary_normals shape:", self.boundary_normals.shape)
+        self.unique_vertices = self.vertices[~is_vertex_on_boundary]
+
         geom = CustomPointCloud(
-            self.vertices, self.vertices_boundary, self.boundary_normals)
+            self.unique_vertices, self.vertices_boundary, self.boundary_normals)
         timedomain = dde.geometry.TimeDomain(0, 600)
         geomtime = dde.geometry.GeometryXTime(geom, timedomain)
 
@@ -175,6 +145,7 @@ def main():
     from sklearn.preprocessing import MinMaxScaler
     scaler = MinMaxScaler()
     X_train = scaler.fit_transform(X_train)
+
     v_train = scaler.fit_transform(v_train.reshape(-1, 1))
     data_list = [X, X_train, v_train, v]
 
@@ -186,37 +157,9 @@ def main():
     data = dde.data.TimePDE(geomtime,
                             pinn.pde2d,
                             input_data,
-                            num_domain=30000,
-                            num_boundary=100)
-    """
+                            num_domain=20000,
+                            num_boundary=1000)
 
-    from sklearn.preprocessing import StandardScaler
-
-    # Get the input data
-    X, X_boundary, v = pinn.get_data()
-    # Normalize the input data (This had a huge impact on performance)
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    X_boundary_scaled = scaler.transform(X_boundary)
-    v_scaled = scaler.fit_transform(v)
-
-    # Train test split
-    X_train, X_test, v_train, v_test = train_test_split(
-        X_scaled, v_scaled, test_size=0.9)
-
-    data_list = [X_scaled, X_train, v_train, v_scaled]
-
-    geomtime = pinn.geotime()
-    observe_v = dde.PointSetBC(X_train, v_train, component=0)
-    ic = pinn.IC(X_train, v_train)
-    bc = pinn.BC(geomtime)
-    input_data = [bc, observe_v]
-
-    data = dde.data.TimePDE(geomtime,
-                            pinn.pde2d,
-                            input_data,
-                            anchors=X_train)
-    """
     n_neurons = 50
     n_layers = 4
     n_epochs = 6000
@@ -224,7 +167,7 @@ def main():
                    "tanh", "tanh", "tanh"]
     net = dde.maps.FNN([3] + [100] + n_layers * [n_neurons] +
                        [2], activations, "Glorot normal")
-    # net.regularizer = ("l2", 0.1)
+    net.regularizer = ("l2", 0.1)
 
     # silu: not too bad, but not great 101x5
     # tanh: not too bad, but not great 100x5
@@ -261,7 +204,7 @@ def main():
             initial_loss = max(losshistory.loss_train[0])
         """
         # Phase1
-        model.compile("adam", lr=0.0005, loss_weights=init_weights)
+        model.compile("adamw", lr=0.0005, loss_weights=init_weights)
         losshistory, train_state = model.train(
             iterations=10000, model_save_path=save_path)
 
@@ -278,19 +221,19 @@ def main():
         dde.saveplot(losshistory, train_state, issave=True, isplot=True)
         """
         # Phase 2
-        weights_phase2 = [0, 0, 0, 0, 1]
-        model.compile("adam", lr=0.0005, loss_weights=weights_phase2)
+        weights_phase2 = [0, 0, 0, 1, 1]
+        model.compile("adamw", lr=0.0005, loss_weights=weights_phase2)
         losshistory, train_state = model.train(
-            iterations=20000, model_save_path=save_path)
+            iterations=10000, model_save_path=save_path)
         dde.saveplot(losshistory, train_state, issave=True, isplot=True)
 
         # Phase 3
         weights_phase3 = [1, 1, 2, 1, 1]
-        model.compile("adam", lr=0.0005, loss_weights=weights_phase3)
+        model.compile("adamw", lr=0.0005, loss_weights=weights_phase3)
         losshistory, train_state = model.train(
-            iterations=50000, model_save_path=save_path)
+            iterations=20000, model_save_path=save_path)
         dde.saveplot(losshistory, train_state, issave=True, isplot=True)
-
+        """ 
         model.compile("L-BFGS-B")
 
         losshistory, train_state = model.train(
@@ -298,7 +241,7 @@ def main():
 
         dde.saveplot(losshistory, train_state, issave=True, isplot=True)
         # model.compile("L-BFGS-B")
-
+        """
         # losshistory, train_state = model.train(model_save_path=save_path,callbacks=[checker])
 
         # Save and plot the loss history
@@ -315,14 +258,15 @@ def main():
         # model.compile("adam", lr=0.0001)
         model.restore(save_path+"-"+input("Enter model checkpoint: ")+".pt")
         from plot import generate_2D_animation, plot_2D
-        plot_2D(pinn, model)
+        # plot_2D(pinn, model)
         generate_2D_animation(pinn, model)
         # plot_2D_grid(data_list, pinn, model, "planar_wave")
 
 
 if __name__ == "__main__":
     dde.config.set_random_seed(42)
-    torch.cuda.set_per_process_memory_fraction(0.9)
-    dde.config.set_default_float("float16")
+    torch.cuda.set_per_process_memory_fraction(1.0)
+
+    dde.config.set_default_float("float32")
 
     main()
